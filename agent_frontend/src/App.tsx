@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
@@ -7,10 +7,15 @@ import { InfoScreen } from './components/InfoScreen.js';
 import { ModeTransitionDialog } from './components/ModeTransitionDialog.js';
 import { CommandSuggestions } from './components/CommandSuggestions.js';
 import { Banner } from './components/Banner.js';
-import { Header } from './components/Header.js';
+import { TabBar } from './components/TabBar.js';
 import { Footer } from './components/Footer.js';
+import { ResourcesView } from './components/ResourcesView.js';
+import { ExperimentsView } from './components/ExperimentsView.js';
+import { ConfigView } from './components/ConfigView.js';
+import { QuickPeek } from './components/QuickPeek.js';
 import { AgentService } from './services/AgentService.js';
-import type { Message, ModeState } from './types.js';
+import { addResources, parseResourcesFromEvents } from './stores/resourceStore.js';
+import type { Message, ModeState, ViewName } from './types.js';
 
 const AVAILABLE_COMMANDS = [
   { name: 'help', description: 'Display available commands' },
@@ -19,11 +24,14 @@ const AVAILABLE_COMMANDS = [
   { name: 'mode', description: 'Display current operation mode' },
   { name: 'quit', description: 'Exit the application' },
   { name: 'exit', description: 'Exit the application' },
+  { name: 'chat', description: 'Switch to Chat view' },
+  { name: 'resources', description: 'Switch to Resources view' },
+  { name: 'experiments', description: 'Switch to Experiments view' },
+  { name: 'config', description: 'Switch to Config view' },
 ];
 
 const MAX_MESSAGES = 100;
 
-// Helper function to limit message history
 const limitMessages = (messages: Message[]) => {
   if (messages.length > MAX_MESSAGES) {
     return messages.slice(-MAX_MESSAGES);
@@ -36,6 +44,7 @@ export function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [activeView, setActiveView] = useState<ViewName>('chat');
   const [modeState, setModeState] = useState<ModeState>({
     current: 'Planning',
     color: 'yellow',
@@ -45,26 +54,39 @@ export function App() {
   const [pendingModeTransition, setPendingModeTransition] = useState<any>(null);
   const [showBanner, setShowBanner] = useState(true);
   const [inputKey, setInputKey] = useState(0);
+  const [currentToolCall, setCurrentToolCall] = useState<{ toolName: string; operation?: string } | null>(null);
+  const [showQuickPeek, setShowQuickPeek] = useState(false);
+  const [awsRegion, setAwsRegion] = useState('');
 
   const { exit } = useApp();
-  // Use useMemo to create AgentService only once and keep the same session ID
   const agentService = useMemo(() => new AgentService(), []);
 
-  // Hide banner when user sends first message
+  // Load initial region
+  useEffect(() => {
+    agentService.getInfo().then((info) => {
+      setAwsRegion(info.aws.region);
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (messages.length > 0) {
       setShowBanner(false);
     }
   }, [messages]);
 
-  // Force TextInput remount after dialogs close to restore focus
   useEffect(() => {
-    if (!showModeDialog && !isLoading && !showInfo) {
+    if (!showModeDialog && !isLoading && !showInfo && activeView === 'chat') {
       setInputKey((prev) => prev + 1);
     }
-  }, [showModeDialog, isLoading, showInfo]);
+  }, [showModeDialog, isLoading, showInfo, activeView]);
 
-  // Handle slash commands
+  const switchView = useCallback((view: ViewName) => {
+    setActiveView(view);
+    if (view === 'chat') {
+      setInputKey((prev) => prev + 1);
+    }
+  }, []);
+
   const handleSlashCommand = async (command: string) => {
     const parts = command.slice(1).split(' ');
     const cmd = parts[0]?.toLowerCase() || '';
@@ -81,50 +103,47 @@ export function App() {
               '/info - Show LLM and AWS information\n' +
               '/clear - Clear chat history\n' +
               '/quit - Exit the application\n' +
-              '/mode - Show current operation mode',
+              '/mode - Show current operation mode\n' +
+              '/chat - Switch to Chat view (or press 1)\n' +
+              '/resources - Switch to Resources view (or press 2)\n' +
+              '/experiments - Switch to Experiments view (or press 3)\n' +
+              '/config - Switch to Config view (or press 4)',
             timestamp: new Date(),
           },
         ]));
         break;
-
       case 'info':
         setShowInfo(true);
         break;
-
       case 'clear':
-        setMessages([
-          {
-            role: 'system',
-            content: 'Chat cleared.',
-            timestamp: new Date(),
-          },
-        ]);
+        setMessages([{ role: 'system', content: 'Chat cleared.', timestamp: new Date() }]);
         break;
-
       case 'quit':
       case 'exit':
         exit();
         break;
-
       case 'mode':
         setMessages((prev) => limitMessages([
           ...prev,
-          {
-            role: 'system',
-            content: `Current Mode: ${modeState.current} - ${modeState.description}`,
-            timestamp: new Date(),
-          },
+          { role: 'system', content: `Current Mode: ${modeState.current} - ${modeState.description}`, timestamp: new Date() },
         ]));
         break;
-
+      case 'chat':
+        switchView('chat');
+        break;
+      case 'resources':
+        switchView('resources');
+        break;
+      case 'experiments':
+        switchView('experiments');
+        break;
+      case 'config':
+        switchView('config');
+        break;
       default:
         setMessages((prev) => limitMessages([
           ...prev,
-          {
-            role: 'system',
-            content: `Unknown command: /${cmd}. Type /help for available commands.`,
-            timestamp: new Date(),
-          },
+          { role: 'system', content: `Unknown command: /${cmd}. Type /help for available commands.`, timestamp: new Date() },
         ]));
     }
   };
@@ -132,28 +151,23 @@ export function App() {
   const handleSubmit = async (value: string) => {
     if (!value.trim()) return;
 
-    // Check if it's a slash command
     if (value.startsWith('/')) {
       await handleSlashCommand(value);
       setInput('');
       return;
     }
 
-    // Add user message
-    const userMessage: Message = {
-      role: 'user',
-      content: value,
-      timestamp: new Date(),
-    };
+    const userMessage: Message = { role: 'user', content: value, timestamp: new Date() };
     setMessages((prev) => limitMessages([...prev, userMessage]));
     setInput('');
     setIsLoading(true);
+    setCurrentToolCall({ toolName: 'thinking', operation: 'processing request...' });
 
     try {
-      // Call the agent service
       const response = await agentService.sendMessage(value);
 
-      // Check for mode transition interrupts
+      setCurrentToolCall(null);
+
       if (response.interrupt) {
         setPendingModeTransition(response.interrupt);
         setShowModeDialog(true);
@@ -161,7 +175,23 @@ export function App() {
         return;
       }
 
-      // Add assistant response
+      // Parse resource data from tool events
+      if (response.events) {
+        const parsed = parseResourcesFromEvents(response.events);
+        if (parsed.length > 0) {
+          addResources(parsed);
+        }
+
+        // Update current tool call display from events
+        const lastToolEvent = [...response.events].reverse().find((e) => e.type === 'tool_call_start');
+        if (lastToolEvent) {
+          setCurrentToolCall({
+            toolName: lastToolEvent.tool_name || 'unknown',
+            operation: lastToolEvent.tool_input?.operation_name || lastToolEvent.tool_input?.service_name,
+          });
+        }
+      }
+
       const assistantMessage: Message = {
         role: 'assistant',
         content: response.content,
@@ -170,6 +200,7 @@ export function App() {
       };
       setMessages((prev) => limitMessages([...prev, assistantMessage]));
     } catch (error) {
+      setCurrentToolCall(null);
       const errorMessage: Message = {
         role: 'system',
         content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -178,6 +209,7 @@ export function App() {
       setMessages((prev) => limitMessages([...prev, errorMessage]));
     } finally {
       setIsLoading(false);
+      setCurrentToolCall(null);
     }
   };
 
@@ -185,7 +217,6 @@ export function App() {
     setShowModeDialog(false);
 
     if (approved && pendingModeTransition) {
-      // Update mode state
       setModeState({
         current: pendingModeTransition.requiredMode,
         color: pendingModeTransition.color || 'yellow',
@@ -194,19 +225,16 @@ export function App() {
 
       setMessages((prev) => limitMessages([
         ...prev,
-        {
-          role: 'system',
-          content: `Mode transition to ${pendingModeTransition.requiredMode} approved.`,
-          timestamp: new Date(),
-        },
+        { role: 'system', content: `Mode transition to ${pendingModeTransition.requiredMode} approved.`, timestamp: new Date() },
       ]));
 
-      // Resume agent with approval
       try {
-        const response = await agentService.respondToInterrupt(
-          pendingModeTransition.id,
-          approved
-        );
+        const response = await agentService.respondToInterrupt(pendingModeTransition.id, approved);
+
+        if (response.events) {
+          const parsed = parseResourcesFromEvents(response.events);
+          if (parsed.length > 0) addResources(parsed);
+        }
 
         const assistantMessage: Message = {
           role: 'assistant',
@@ -226,24 +254,46 @@ export function App() {
     } else {
       setMessages((prev) => limitMessages([
         ...prev,
-        {
-          role: 'system',
-          content: `Mode transition to ${pendingModeTransition?.requiredMode} rejected.`,
-          timestamp: new Date(),
-        },
+        { role: 'system', content: `Mode transition to ${pendingModeTransition?.requiredMode} rejected.`, timestamp: new Date() },
       ]));
     }
 
     setPendingModeTransition(null);
   };
 
+  const handleRefreshResources = () => {
+    switchView('chat');
+    handleSubmit('Discover and list all AWS resources in the current region.');
+  };
+
+  const handleRefreshExperiments = () => {
+    switchView('chat');
+    handleSubmit('List all saved experiment plans and any running FIS experiments.');
+  };
+
   // Global key handlers
   useInput((_input, key) => {
     if (key.escape && showInfo) {
       setShowInfo(false);
+      return;
+    }
+
+    // Quick-peek: Tab key
+    if (key.tab && activeView === 'chat' && !isLoading && !showModeDialog && !showInfo) {
+      setShowQuickPeek((prev) => !prev);
+      return;
+    }
+
+    // View switching with number keys (only when not typing in input)
+    if (activeView !== 'chat' || (!isLoading && !showModeDialog && !showInfo && !input)) {
+      if (_input === '1') { switchView('chat'); return; }
+      if (_input === '2') { switchView('resources'); return; }
+      if (_input === '3') { switchView('experiments'); return; }
+      if (_input === '4') { switchView('config'); return; }
     }
   });
 
+  // Mode transition dialog takes over the screen
   if (showModeDialog && pendingModeTransition) {
     return (
       <ModeTransitionDialog
@@ -268,44 +318,71 @@ export function App() {
 
   return (
     <Box flexDirection="column" height="100%">
-      <Header />
+      <TabBar activeView={activeView} mode={modeState} region={awsRegion} />
 
-      <Box flexGrow={1} flexDirection="column" paddingX={1}>
-        {showBanner && <Banner />}
-        <ChatDisplay messages={messages} />
-      </Box>
+      {/* View content */}
+      {activeView === 'chat' && (
+        <>
+          <Box flexGrow={1} flexDirection="column" paddingX={1}>
+            {showBanner && <Banner />}
+            <ChatDisplay messages={messages} currentToolCall={currentToolCall} />
+          </Box>
 
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderTop={true}
-        paddingX={1}
-        paddingY={0}
-      >
-        <CommandSuggestions input={input} commands={AVAILABLE_COMMANDS} />
-        <Box>
-          <Text color="cyan">› </Text>
-          {isLoading || showModeDialog ? (
-            <Box>
-              <Spinner type="dots" />
-              <Text>
-                {' '}
-                {showModeDialog
-                  ? 'Waiting for mode approval...'
-                  : 'Loading...'}
-              </Text>
-            </Box>
-          ) : (
-            <TextInput
-              key={inputKey}
-              value={input}
-              onChange={setInput}
-              onSubmit={handleSubmit}
-              placeholder="Type your message... (Press Enter to send, /help for commands)"
-            />
+          {/* Quick-peek overlay */}
+          {showQuickPeek && (
+            <QuickPeek onDismiss={() => setShowQuickPeek(false)} />
           )}
-        </Box>
-      </Box>
+
+          <Box
+            flexDirection="column"
+            borderStyle="single"
+            borderTop={true}
+            paddingX={1}
+            paddingY={0}
+          >
+            <CommandSuggestions input={input} commands={AVAILABLE_COMMANDS} />
+            <Box>
+              <Text color="cyan">› </Text>
+              {isLoading ? (
+                <Box>
+                  <Spinner type="dots" />
+                  <Text> Processing...</Text>
+                </Box>
+              ) : (
+                <TextInput
+                  key={inputKey}
+                  value={input}
+                  onChange={setInput}
+                  onSubmit={handleSubmit}
+                  placeholder="Type your message... (Press Enter to send, /help for commands)"
+                />
+              )}
+            </Box>
+          </Box>
+        </>
+      )}
+
+      {activeView === 'resources' && (
+        <ResourcesView
+          onBack={() => switchView('chat')}
+          onRefresh={handleRefreshResources}
+        />
+      )}
+
+      {activeView === 'experiments' && (
+        <ExperimentsView
+          onBack={() => switchView('chat')}
+          onRefresh={handleRefreshExperiments}
+        />
+      )}
+
+      {activeView === 'config' && (
+        <ConfigView
+          agentService={agentService}
+          mode={modeState}
+          onBack={() => switchView('chat')}
+        />
+      )}
 
       <Footer mode={modeState} />
     </Box>
