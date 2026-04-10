@@ -49,6 +49,8 @@ logs/
 
 # Claude
 .claude
+.superpowers/
+docs/superpowers/
 
 # Test coverage
 htmlcov/
