@@ -60,7 +60,7 @@ export function ExperimentsView({ onBack, onRefresh }: ExperimentsViewProps) {
 
     if (key.tab) {
       const currentIdx = SUB_TABS.indexOf(subTab);
-      setSubTab(SUB_TABS[(currentIdx + 1) % SUB_TABS.length]);
+      setSubTab(SUB_TABS[(currentIdx + 1) % SUB_TABS.length] as typeof subTab);
       setSelectedRow(0);
       return;
     }

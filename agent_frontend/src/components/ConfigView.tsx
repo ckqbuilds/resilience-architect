@@ -86,14 +86,15 @@ export function ConfigView({ agentService, mode, onBack }: ConfigViewProps) {
 
     const currentIdx = config.options.indexOf(config.value);
     const nextIdx = (currentIdx + direction + config.options.length) % config.options.length;
-    const newValue = config.options[nextIdx];
+    const newValue = config.options[nextIdx] as string;
+    if (!newValue) return;
 
     setIsSaving(true);
     setMessage('');
     try {
       if (config.label === 'LLM Provider') {
         const providers = (await agentService.listModelProviders()).providers;
-        const defaultModel = providers[newValue]?.default_model || '';
+        const defaultModel = (providers as Record<string, any>)[newValue]?.default_model || '';
         await agentService.switchModel({ provider: newValue, model_id: defaultModel });
         await loadConfig();
       } else if (config.label === 'Model') {

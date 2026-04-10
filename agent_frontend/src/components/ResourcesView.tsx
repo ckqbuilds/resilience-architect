@@ -27,7 +27,7 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
 
   const query = parseFilter(filterText);
   const filtered = filterResources(query);
-  const sorted = sortResources(filtered, SORT_KEYS[sortIndex]);
+  const sorted = sortResources(filtered, SORT_KEYS[sortIndex] ?? 'service');
 
   useInput((input, key) => {
     if (showFilter) {
@@ -154,16 +154,16 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
           return (
             <Box key={`${resource.id}-${idx}`}>
               <Text inverse={isSelected}>
-                <Box width={COLUMNS[0].width}><Text>{resource.service}</Text></Box>
+                <Box width={COLUMNS[0]!.width}><Text>{resource.service}</Text></Box>
               </Text>
               <Text inverse={isSelected}>
-                <Box width={COLUMNS[1].width}><Text>{resource.name.slice(0, COLUMNS[1].width - 2)}</Text></Box>
+                <Box width={COLUMNS[1]!.width}><Text>{resource.name.slice(0, COLUMNS[1]!.width - 2)}</Text></Box>
               </Text>
               <Text inverse={isSelected}>
-                <Box width={COLUMNS[2].width}><Text color="green">{resource.status}</Text></Box>
+                <Box width={COLUMNS[2]!.width}><Text color="green">{resource.status}</Text></Box>
               </Text>
               <Text inverse={isSelected}>
-                <Box width={COLUMNS[3].width}><Text>{resource.region}</Text></Box>
+                <Box width={COLUMNS[3]!.width}><Text>{resource.region}</Text></Box>
               </Text>
               <Text inverse={isSelected} dimColor>{tagStr.slice(0, 30)}</Text>
             </Box>

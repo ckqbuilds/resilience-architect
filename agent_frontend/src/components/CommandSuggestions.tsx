@@ -27,7 +27,7 @@ export function CommandSuggestions({ input, commands }: CommandSuggestionsProps)
 
   // Don't show if no matches or if exact match
   if (filteredCommands.length === 0 ||
-      (filteredCommands.length === 1 && filteredCommands[0].name === searchTerm)) {
+      (filteredCommands.length === 1 && filteredCommands[0]?.name === searchTerm)) {
     return null;
   }
 
