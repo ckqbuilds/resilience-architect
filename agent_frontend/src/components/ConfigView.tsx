@@ -23,6 +23,7 @@ export function ConfigView({ agentService, mode, onBack }: ConfigViewProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [configs, setConfigs] = useState<ConfigOption[]>([]);
+  const [pendingValue, setPendingValue] = useState<string | null>(null);
 
   useEffect(() => {
     loadConfig();
@@ -80,50 +81,73 @@ export function ConfigView({ agentService, mode, onBack }: ConfigViewProps) {
     }
   };
 
-  const cycleValue = async (direction: number) => {
+  const cycleValue = (direction: number) => {
     const config = configs[selectedRow];
     if (!config || !config.editable || config.options.length === 0) return;
 
-    const currentIdx = config.options.indexOf(config.value);
+    const currentValue = pendingValue ?? config.value;
+    const currentIdx = config.options.indexOf(currentValue);
     const nextIdx = (currentIdx + direction + config.options.length) % config.options.length;
     const newValue = config.options[nextIdx] as string;
     if (!newValue) return;
+
+    setPendingValue(newValue);
+    setMessage('');
+  };
+
+  const applyValue = async () => {
+    if (pendingValue === null) return;
+    const config = configs[selectedRow];
+    if (!config || !config.editable) return;
 
     setIsSaving(true);
     setMessage('');
     try {
       if (config.label === 'LLM Provider') {
         const providers = (await agentService.listModelProviders()).providers;
-        const defaultModel = (providers as Record<string, any>)[newValue]?.default_model || '';
-        await agentService.switchModel({ provider: newValue, model_id: defaultModel });
+        const defaultModel = (providers as Record<string, any>)[pendingValue]?.default_model || '';
+        await agentService.switchModel({ provider: pendingValue, model_id: defaultModel });
         await loadConfig();
       } else if (config.label === 'Model') {
         const provider = configs.find((c) => c.label === 'LLM Provider')?.value || 'anthropic';
-        await agentService.switchModel({ provider, model_id: newValue });
-        setConfigs((prev) => prev.map((c, i) => i === selectedRow ? { ...c, value: newValue } : c));
+        await agentService.switchModel({ provider, model_id: pendingValue });
+        setConfigs((prev) => prev.map((c, i) => i === selectedRow ? { ...c, value: pendingValue! } : c));
       } else if (config.label === 'AWS Profile') {
-        await agentService.switchProfile(newValue);
-        setConfigs((prev) => prev.map((c, i) => i === selectedRow ? { ...c, value: newValue } : c));
+        await agentService.switchProfile(pendingValue);
+        setConfigs((prev) => prev.map((c, i) => i === selectedRow ? { ...c, value: pendingValue! } : c));
       }
-      setMessage(`Updated ${config.label} to ${newValue}`);
+      setMessage(`Updated ${config.label} to ${pendingValue}`);
     } catch (error) {
       setMessage(`Error: ${error instanceof Error ? error.message : 'Unknown'}`);
     } finally {
       setIsSaving(false);
+      setPendingValue(null);
     }
   };
 
   useInput((input, key) => {
     if (key.escape) {
-      onBack();
+      if (pendingValue !== null) {
+        setPendingValue(null);
+        setMessage('');
+      } else {
+        onBack();
+      }
+      return;
+    }
+
+    if (key.return) {
+      applyValue();
       return;
     }
 
     if (key.upArrow) {
+      setPendingValue(null);
       setSelectedRow((prev) => Math.max(0, prev - 1));
     }
 
     if (key.downArrow) {
+      setPendingValue(null);
       setSelectedRow((prev) => Math.min(configs.length - 1, prev + 1));
     }
 
@@ -152,16 +176,21 @@ export function ConfigView({ agentService, mode, onBack }: ConfigViewProps) {
       <Box flexDirection="column" marginTop={1}>
         {configs.map((config, idx) => {
           const isSelected = idx === selectedRow;
+          const displayValue = isSelected && pendingValue !== null ? pendingValue : config.value;
+          const hasPending = isSelected && pendingValue !== null;
           return (
             <Box key={config.label} marginY={0}>
               <Box width={20}>
                 <Text inverse={isSelected} bold={isSelected}>{config.label}</Text>
               </Box>
-              <Text inverse={isSelected} color={config.editable ? 'green' : 'gray'}>
-                {config.value}
+              <Text inverse={isSelected} color={hasPending ? 'yellow' : config.editable ? 'green' : 'gray'}>
+                {displayValue}
               </Text>
-              {config.editable && isSelected && (
+              {config.editable && isSelected && !hasPending && (
                 <Text dimColor> (← → to change)</Text>
+              )}
+              {hasPending && (
+                <Text color="yellow"> ← Enter to confirm, Esc to cancel</Text>
               )}
             </Box>
           );
@@ -182,7 +211,7 @@ export function ConfigView({ agentService, mode, onBack }: ConfigViewProps) {
       )}
 
       <Box marginTop={1}>
-        <Text dimColor>↑↓ navigate • ← → change value • Esc back</Text>
+        <Text dimColor>↑↓ navigate • ← → cycle value • Enter confirm • Esc back</Text>
       </Box>
     </Box>
   );
