@@ -33,6 +33,8 @@ export interface AgentResponse {
     color?: string;
     description?: string;
   };
+  resources?: Resource[];
+  experiments?: ExperimentRow[];
 }
 
 export interface AWSConfig {

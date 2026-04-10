@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import boto3
+import json
 from dotenv import load_dotenv
 import os
 
@@ -61,6 +62,8 @@ class ChatResponse(BaseModel):
     content: str
     events: Optional[List[Dict[str, Any]]] = None
     interrupt: Optional[Dict[str, Any]] = None
+    resources: Optional[List[Dict[str, Any]]] = None
+    experiments: Optional[List[Dict[str, Any]]] = None
 
 
 @app.get("/")
@@ -140,9 +143,15 @@ async def chat(request: ChatRequest):
         # Extract text from normal response
         content = extract_text_from_response(response)
 
+        # Extract structured data from tool results
+        resources = extract_resources_from_response(response)
+        experiments = extract_experiments_from_response(response)
+
         return ChatResponse(
             content=content,
-            events=events if events else None
+            events=events if events else None,
+            resources=resources if resources else None,
+            experiments=experiments if experiments else None,
         )
 
     except Exception as e:
@@ -228,9 +237,15 @@ async def respond_to_interrupt(request: InterruptResponse):
             # Extract text from response
             content = extract_text_from_response(result)
 
+            # Extract structured data from tool results
+            resources = extract_resources_from_response(result)
+            experiments = extract_experiments_from_response(result)
+
             return ChatResponse(
                 content=content,
-                events=events if events else None
+                events=events if events else None,
+                resources=resources if resources else None,
+                experiments=experiments if experiments else None,
             )
 
         except Exception as agent_error:
@@ -469,6 +484,193 @@ async def switch_model(request: ModelSwitchRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def extract_resources_from_response(response) -> List[Dict[str, Any]]:
+    """
+    Extract structured resource data from agent tool results.
+    Parses AWS API responses from toolResult blocks in the agent's message.
+    """
+    resources = []
+    try:
+        if not hasattr(response, 'message') or not isinstance(response.message, dict):
+            return resources
+
+        content_blocks = response.message.get('content', [])
+
+        # Track tool uses and their results together
+        tool_uses = {}
+        for block in content_blocks:
+            if isinstance(block, dict):
+                if 'toolUse' in block:
+                    tool_use = block['toolUse']
+                    tool_uses[tool_use.get('toolUseId')] = tool_use
+                elif 'toolResult' in block:
+                    tool_result = block['toolResult']
+                    tool_use_id = tool_result.get('toolUseId')
+                    tool_use = tool_uses.get(tool_use_id, {})
+                    tool_name = tool_use.get('name', '')
+                    tool_input = tool_use.get('input', {})
+
+                    if tool_name != 'use_aws':
+                        continue
+
+                    service = tool_input.get('service_name', 'unknown')
+                    region = tool_input.get('region', '')
+
+                    # Extract result content
+                    result_content = tool_result.get('content', [])
+                    result_text = ''
+                    if isinstance(result_content, list):
+                        for rc in result_content:
+                            if isinstance(rc, dict) and 'text' in rc:
+                                result_text = rc['text']
+                                break
+                    elif isinstance(result_content, str):
+                        result_text = result_content
+
+                    if not result_text:
+                        continue
+
+                    try:
+                        result_data = json.loads(result_text) if isinstance(result_text, str) else result_text
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+                    if not isinstance(result_data, dict):
+                        continue
+
+                    # Parse common AWS list/describe response patterns
+                    for key, value in result_data.items():
+                        if not isinstance(value, list):
+                            continue
+                        for item in value:
+                            if not isinstance(item, dict):
+                                continue
+
+                            name = (item.get('Name') or item.get('FunctionName') or
+                                   item.get('ClusterName') or item.get('DBInstanceIdentifier') or
+                                   item.get('InstanceId') or item.get('GroupName') or
+                                   item.get('BucketName') or item.get('TopicArn') or
+                                   item.get('QueueUrl') or
+                                   next((v for v in item.values() if isinstance(v, str)), 'unnamed'))
+
+                            resource_id = (item.get('Arn') or item.get('InstanceId') or
+                                          item.get('FunctionArn') or item.get('ClusterArn') or
+                                          item.get('DBInstanceIdentifier') or str(name))
+
+                            status = item.get('State') or item.get('Status') or item.get('status') or 'unknown'
+                            if isinstance(status, dict):
+                                status = status.get('Name', str(status))
+
+                            tags = {}
+                            tag_list = item.get('Tags') or item.get('tags') or []
+                            if isinstance(tag_list, list):
+                                for t in tag_list:
+                                    if isinstance(t, dict):
+                                        if t.get('Key') and t.get('Value'):
+                                            tags[t['Key']] = t['Value']
+                                        elif t.get('key') and t.get('value'):
+                                            tags[t['key']] = t['value']
+                            elif isinstance(tag_list, dict):
+                                tags.update(tag_list)
+
+                            resources.append({
+                                'service': service,
+                                'name': str(name),
+                                'id': str(resource_id),
+                                'status': str(status),
+                                'region': region,
+                                'tags': tags,
+                            })
+    except Exception:
+        pass
+
+    return resources
+
+
+def extract_experiments_from_response(response) -> List[Dict[str, Any]]:
+    """
+    Extract experiment plan data from agent tool results.
+    Looks for save_experiment_plan or list_experiment_plans tool results.
+    """
+    experiments = []
+    try:
+        if not hasattr(response, 'message') or not isinstance(response.message, dict):
+            return experiments
+
+        content_blocks = response.message.get('content', [])
+
+        tool_uses = {}
+        for block in content_blocks:
+            if isinstance(block, dict):
+                if 'toolUse' in block:
+                    tool_use = block['toolUse']
+                    tool_uses[tool_use.get('toolUseId')] = tool_use
+                elif 'toolResult' in block:
+                    tool_result = block['toolResult']
+                    tool_use_id = tool_result.get('toolUseId')
+                    tool_use = tool_uses.get(tool_use_id, {})
+                    tool_name = tool_use.get('name', '')
+
+                    if tool_name not in ('save_experiment_plan', 'list_experiment_plans',
+                                         'load_experiment_plan', 'get_plan_summary'):
+                        continue
+
+                    result_content = tool_result.get('content', [])
+                    result_text = ''
+                    if isinstance(result_content, list):
+                        for rc in result_content:
+                            if isinstance(rc, dict) and 'text' in rc:
+                                result_text = rc['text']
+                                break
+                    elif isinstance(result_content, str):
+                        result_text = result_content
+
+                    if not result_text:
+                        continue
+
+                    try:
+                        result_data = json.loads(result_text) if isinstance(result_text, str) else result_text
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+                    # Handle list of plans
+                    plans = []
+                    if isinstance(result_data, list):
+                        plans = result_data
+                    elif isinstance(result_data, dict):
+                        if 'plans' in result_data:
+                            plans = result_data['plans'] if isinstance(result_data['plans'], list) else [result_data['plans']]
+                        else:
+                            plans = [result_data]
+
+                    for plan in plans:
+                        if not isinstance(plan, dict):
+                            continue
+
+                        name = plan.get('name') or plan.get('experiment_name') or plan.get('title') or 'Unnamed'
+                        status = plan.get('status', 'draft')
+                        risk = plan.get('risk_level') or plan.get('riskLevel') or 'MEDIUM'
+                        targets = plan.get('targets') or plan.get('target_resources') or ''
+                        if isinstance(targets, list):
+                            targets = ', '.join(str(t.get('name', t) if isinstance(t, dict) else t) for t in targets)
+                        duration = plan.get('duration') or plan.get('estimated_duration') or ''
+                        plan_id = plan.get('id') or plan.get('plan_id') or str(name)
+
+                        experiments.append({
+                            'source': 'local',
+                            'name': str(name),
+                            'status': str(status),
+                            'riskLevel': str(risk),
+                            'targets': str(targets),
+                            'duration': str(duration),
+                            'id': str(plan_id),
+                        })
+    except Exception:
+        pass
+
+    return experiments
 
 
 def extract_text_from_response(response) -> str:

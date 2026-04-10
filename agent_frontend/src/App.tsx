@@ -14,7 +14,8 @@ import { ExperimentsView } from './components/ExperimentsView.js';
 import { ConfigView } from './components/ConfigView.js';
 import { QuickPeek } from './components/QuickPeek.js';
 import { AgentService } from './services/AgentService.js';
-import { addResources, parseResourcesFromEvents } from './stores/resourceStore.js';
+import { addResources } from './stores/resourceStore.js';
+import { setLocalPlans } from './stores/planStore.js';
 import type { Message, ModeState, ViewName } from './types.js';
 
 const AVAILABLE_COMMANDS = [
@@ -175,21 +176,12 @@ export function App() {
         return;
       }
 
-      // Parse resource data from tool events
-      if (response.events) {
-        const parsed = parseResourcesFromEvents(response.events);
-        if (parsed.length > 0) {
-          addResources(parsed);
-        }
-
-        // Update current tool call display from events
-        const lastToolEvent = [...response.events].reverse().find((e) => e.type === 'tool_call_start');
-        if (lastToolEvent) {
-          setCurrentToolCall({
-            toolName: lastToolEvent.tool_name || 'unknown',
-            operation: lastToolEvent.tool_input?.operation_name || lastToolEvent.tool_input?.service_name,
-          });
-        }
+      // Push structured data from backend into stores
+      if (response.resources && response.resources.length > 0) {
+        addResources(response.resources);
+      }
+      if (response.experiments && response.experiments.length > 0) {
+        setLocalPlans(response.experiments);
       }
 
       const assistantMessage: Message = {
@@ -231,9 +223,11 @@ export function App() {
       try {
         const response = await agentService.respondToInterrupt(pendingModeTransition.id, approved);
 
-        if (response.events) {
-          const parsed = parseResourcesFromEvents(response.events);
-          if (parsed.length > 0) addResources(parsed);
+        if (response.resources && response.resources.length > 0) {
+          addResources(response.resources);
+        }
+        if (response.experiments && response.experiments.length > 0) {
+          setLocalPlans(response.experiments);
         }
 
         const assistantMessage: Message = {
