@@ -23,6 +23,17 @@ export function clearResources(): void {
   resources = [];
 }
 
+export function toggleResourceSelection(id: string): void {
+  const resource = resources.find((r) => r.id === id);
+  if (resource) {
+    resource.selected = !resource.selected;
+  }
+}
+
+export function getSelectedResources(): Resource[] {
+  return resources.filter((r) => r.selected);
+}
+
 export function filterResources(query: FilterQuery): Resource[] {
   return resources.filter((r) => {
     if (query.service && r.service.toLowerCase() !== query.service.toLowerCase()) {

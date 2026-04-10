@@ -135,4 +135,35 @@ export class AgentService {
       throw error;
     }
   }
+
+  async discoverResources(query: string = '*', region?: string): Promise<{
+    resources: Array<{
+      service: string;
+      name: string;
+      id: string;
+      status: string;
+      region: string;
+      tags: Record<string, string>;
+      resourceType?: string;
+      selected?: boolean;
+    }>;
+    count: number;
+    query: string;
+    region: string;
+  }> {
+    try {
+      const response = await axios.post(`${this.baseUrl}/api/discover`, {
+        query,
+        region,
+      });
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        throw new Error(
+          error.response?.data?.detail || error.message || 'Failed to discover resources'
+        );
+      }
+      throw error;
+    }
+  }
 }

@@ -360,6 +360,7 @@ export function App() {
         <ResourcesView
           onBack={() => switchView('chat')}
           onRefresh={handleRefreshResources}
+          agentService={agentService}
         />
       )}
 

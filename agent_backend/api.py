@@ -76,6 +76,112 @@ async def health():
     return {"status": "healthy"}
 
 
+class DiscoverRequest(BaseModel):
+    query: str = "*"
+    region: Optional[str] = None
+
+
+@app.post("/api/discover")
+async def discover_resources(request: DiscoverRequest):
+    """
+    Discover AWS resources via Resource Explorer. Returns structured resource data
+    directly — no agent involved. Fast, deterministic, populates the Resources view.
+    """
+    try:
+        session = aws_session_state["session"]
+        region = request.region or session.region_name or "us-east-1"
+
+        explorer = session.client('resource-explorer-2', region_name=region)
+
+        # Get default view
+        try:
+            default_view = explorer.get_default_view()
+            view_arn = default_view.get('ViewArn')
+        except Exception:
+            # If no default view, try listing views
+            views_resp = explorer.list_views()
+            views = views_resp.get('Views', [])
+            if not views:
+                return {"resources": [], "message": "No Resource Explorer views found. Enable Resource Explorer in this region."}
+            view_arn = views[0]
+
+        # Search resources
+        all_resources = []
+        search_params = {
+            'QueryString': request.query,
+            'ViewArn': view_arn,
+            'MaxResults': 100,
+        }
+
+        response = explorer.search(**search_params)
+        all_resources.extend(response.get('Resources', []))
+
+        # Paginate
+        while 'NextToken' in response and len(all_resources) < 500:
+            search_params['NextToken'] = response['NextToken']
+            response = explorer.search(**search_params)
+            all_resources.extend(response.get('Resources', []))
+
+        # Transform Resource Explorer format to our Resource format
+        resources = []
+        for r in all_resources:
+            arn = r.get('Arn', '')
+            resource_type = r.get('ResourceType', '')
+            # Extract service name from resource type (e.g., "aws.ecs.cluster" -> "ecs")
+            parts = resource_type.split('.')
+            service = parts[1] if len(parts) > 1 else resource_type
+
+            # Get name from properties or ARN
+            properties = {}
+            for prop in r.get('Properties', []):
+                try:
+                    data = json.loads(prop.get('Data', '{}')) if isinstance(prop.get('Data'), str) else prop.get('Data', {})
+                    properties.update(data) if isinstance(data, dict) else None
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            name = (properties.get('Name') or properties.get('FunctionName') or
+                   properties.get('ClusterName') or properties.get('DBInstanceIdentifier') or
+                   arn.split('/')[-1] if '/' in arn else arn.split(':')[-1])
+
+            # Get tags
+            tags = {}
+            for prop in r.get('Properties', []):
+                try:
+                    data = json.loads(prop.get('Data', '{}')) if isinstance(prop.get('Data'), str) else prop.get('Data', {})
+                    if isinstance(data, dict):
+                        tag_list = data.get('Tags') or data.get('tags') or []
+                        if isinstance(tag_list, list):
+                            for t in tag_list:
+                                if isinstance(t, dict) and t.get('Key') and t.get('Value'):
+                                    tags[t['Key']] = t['Value']
+                        elif isinstance(tag_list, dict):
+                            tags.update(tag_list)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            resources.append({
+                'service': service,
+                'name': str(name),
+                'id': arn,
+                'status': 'discovered',
+                'region': r.get('Region', region),
+                'tags': tags,
+                'resourceType': resource_type,
+                'selected': False,
+            })
+
+        return {
+            "resources": resources,
+            "count": len(resources),
+            "query": request.query,
+            "region": region,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """

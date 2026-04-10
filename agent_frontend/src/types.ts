@@ -116,6 +116,7 @@ export interface Resource {
   id: string;
   status: string;
   region: string;
+  selected?: boolean;
   tags: Record<string, string>;
 }
 

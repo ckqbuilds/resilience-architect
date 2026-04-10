@@ -1,12 +1,24 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
+import Spinner from 'ink-spinner';
 import { FilterBar } from './FilterBar.js';
-import { getResources, filterResources, sortResources, parseFilter } from '../stores/resourceStore.js';
+import {
+  getResources,
+  addResources,
+  clearResources,
+  filterResources,
+  sortResources,
+  parseFilter,
+  toggleResourceSelection,
+  getSelectedResources,
+} from '../stores/resourceStore.js';
+import { AgentService } from '../services/AgentService.js';
 import type { Resource } from '../types.js';
 
 interface ResourcesViewProps {
   onBack: () => void;
   onRefresh: () => void;
+  agentService: AgentService;
 }
 
 const COLUMNS: { key: keyof Resource; label: string; width: number }[] = [
@@ -18,16 +30,42 @@ const COLUMNS: { key: keyof Resource; label: string; width: number }[] = [
 
 const SORT_KEYS: (keyof Resource)[] = ['service', 'name', 'status', 'region'];
 
-export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
+export function ResourcesView({ onBack, onRefresh, agentService }: ResourcesViewProps) {
   const [filterText, setFilterText] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [selectedRow, setSelectedRow] = useState(0);
   const [sortIndex, setSortIndex] = useState(0);
   const [showDetail, setShowDetail] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoverError, setDiscoverError] = useState('');
+  const [tick, setTick] = useState(0);
+
+  // Auto-discover on mount if no resources cached
+  useEffect(() => {
+    if (getResources().length === 0) {
+      runDiscovery();
+    }
+  }, []);
+
+  const runDiscovery = async (query: string = '*') => {
+    setIsDiscovering(true);
+    setDiscoverError('');
+    try {
+      const result = await agentService.discoverResources(query);
+      clearResources();
+      addResources(result.resources);
+      setTick((prev) => prev + 1);
+    } catch (error) {
+      setDiscoverError(error instanceof Error ? error.message : 'Discovery failed');
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
 
   const query = parseFilter(filterText);
   const filtered = filterResources(query);
   const sorted = sortResources(filtered, SORT_KEYS[sortIndex] ?? 'service');
+  const selectedCount = getSelectedResources().length;
 
   useInput((input, key) => {
     if (showFilter) {
@@ -53,7 +91,7 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
     }
 
     if (input === 'r') {
-      onRefresh();
+      runDiscovery();
       return;
     }
 
@@ -70,39 +108,77 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
       setSelectedRow((prev) => Math.min(sorted.length - 1, prev + 1));
     }
 
+    // Space to toggle selection
+    if (input === ' ' && sorted.length > 0 && !showDetail) {
+      const resource = sorted[selectedRow];
+      if (resource) {
+        toggleResourceSelection(resource.id);
+        setTick((prev) => prev + 1);
+      }
+      return;
+    }
+
     if (key.return && sorted.length > 0) {
       setShowDetail(!showDetail);
     }
   });
 
-  if (sorted.length === 0) {
+  if (isDiscovering) {
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text dimColor>
-          No resources discovered. Switch to Chat and ask the agent to scan your infrastructure.
-        </Text>
-        <Box marginTop={1}>
-          <Text dimColor>Press Esc to go back • r to refresh</Text>
+        <Box>
+          <Spinner type="dots" />
+          <Text> Discovering resources via AWS Resource Explorer...</Text>
         </Box>
       </Box>
     );
   }
 
-  const selectedResource = sorted[selectedRow];
-
-  if (showDetail && selectedResource) {
+  if (discoverError) {
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="cyan">{selectedResource.name}</Text>
+        <Text color="red">Discovery error: {discoverError}</Text>
+        <Box marginTop={1}>
+          <Text dimColor>r to retry • Esc to go back</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (sorted.length === 0 && getResources().length === 0) {
+    return (
+      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
+        <Text dimColor>
+          No resources discovered. Press r to scan, or switch to Chat and ask the agent.
+        </Text>
+        <Box marginTop={1}>
+          <Text dimColor>r to discover • / to filter • Esc to go back</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  const currentResource = sorted[selectedRow];
+
+  if (showDetail && currentResource) {
+    return (
+      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
+        <Box>
+          <Text bold color="cyan">{currentResource.name}</Text>
+          <Text> </Text>
+          <Text color={currentResource.selected ? 'green' : 'gray'}>
+            {currentResource.selected ? '[SELECTED]' : '[not selected]'}
+          </Text>
+        </Box>
         <Box marginTop={1} flexDirection="column">
-          <Text>Service: <Text color="cyan">{selectedResource.service}</Text></Text>
-          <Text>ID: <Text dimColor>{selectedResource.id}</Text></Text>
-          <Text>Status: <Text color="green">{selectedResource.status}</Text></Text>
-          <Text>Region: {selectedResource.region}</Text>
+          <Text>Service: <Text color="cyan">{currentResource.service}</Text></Text>
+          <Text>ID: <Text dimColor>{currentResource.id}</Text></Text>
+          <Text>Status: <Text color="green">{currentResource.status}</Text></Text>
+          <Text>Region: {currentResource.region}</Text>
           <Box marginTop={1} flexDirection="column">
             <Text bold>Tags:</Text>
-            {Object.entries(selectedResource.tags).length > 0 ? (
-              Object.entries(selectedResource.tags).map(([k, v]) => (
+            {Object.entries(currentResource.tags).length > 0 ? (
+              Object.entries(currentResource.tags).map(([k, v]) => (
                 <Text key={k} dimColor>  {k} = {v}</Text>
               ))
             ) : (
@@ -111,7 +187,7 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
           </Box>
         </Box>
         <Box marginTop={1}>
-          <Text dimColor>Esc to go back</Text>
+          <Text dimColor>Space to toggle selection • Esc to go back</Text>
         </Box>
       </Box>
     );
@@ -122,6 +198,8 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
       {/* Info bar */}
       <Box paddingX={1} gap={2}>
         <Text dimColor>{sorted.length} resources</Text>
+        <Text dimColor>│</Text>
+        <Text color="green">{selectedCount} selected</Text>
         <Text dimColor>│</Text>
         <Text dimColor>Sort: <Text color="cyan">{SORT_KEYS[sortIndex]}</Text></Text>
       </Box>
@@ -137,6 +215,9 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
 
       {/* Column headers */}
       <Box paddingX={1} marginTop={1}>
+        <Box width={3}>
+          <Text bold color="blue"> </Text>
+        </Box>
         {COLUMNS.map((col) => (
           <Box key={col.key} width={col.width}>
             <Text bold color="blue">{col.label}</Text>
@@ -148,24 +229,29 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
       {/* Rows */}
       <Box flexDirection="column" paddingX={1} flexGrow={1}>
         {sorted.map((resource, idx) => {
-          const isSelected = idx === selectedRow;
+          const isCursor = idx === selectedRow;
           const tagStr = Object.entries(resource.tags).map(([k, v]) => `${k}=${v}`).join(', ');
 
           return (
             <Box key={`${resource.id}-${idx}`}>
+              <Box width={3}>
+                <Text color={resource.selected ? 'green' : 'gray'}>
+                  {resource.selected ? '◉ ' : '○ '}
+                </Text>
+              </Box>
               <Box width={COLUMNS[0]!.width}>
-                <Text inverse={isSelected}>{resource.service}</Text>
+                <Text inverse={isCursor}>{resource.service}</Text>
               </Box>
               <Box width={COLUMNS[1]!.width}>
-                <Text inverse={isSelected}>{resource.name.slice(0, COLUMNS[1]!.width - 2)}</Text>
+                <Text inverse={isCursor}>{resource.name.slice(0, COLUMNS[1]!.width - 2)}</Text>
               </Box>
               <Box width={COLUMNS[2]!.width}>
-                <Text inverse={isSelected} color="green">{resource.status}</Text>
+                <Text inverse={isCursor} color="green">{resource.status}</Text>
               </Box>
               <Box width={COLUMNS[3]!.width}>
-                <Text inverse={isSelected}>{resource.region}</Text>
+                <Text inverse={isCursor}>{resource.region}</Text>
               </Box>
-              <Text inverse={isSelected} dimColor>{tagStr.slice(0, 30)}</Text>
+              <Text dimColor>{tagStr.slice(0, 30)}</Text>
             </Box>
           );
         })}
@@ -173,7 +259,7 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
 
       {/* Help bar */}
       <Box paddingX={1}>
-        <Text dimColor>↑↓ navigate • / filter • s sort • Enter details • r refresh • Esc back</Text>
+        <Text dimColor>↑↓ navigate • Space select • / filter • s sort • Enter details • r rediscover • Esc back</Text>
       </Box>
     </Box>
   );
