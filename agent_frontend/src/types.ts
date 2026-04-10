@@ -105,3 +105,36 @@ export interface ModelSwitchResponse {
   maxTokens: number;
   temperature: number;
 }
+
+export type ViewName = 'chat' | 'resources' | 'experiments' | 'config';
+
+export interface Resource {
+  service: string;
+  name: string;
+  id: string;
+  status: string;
+  region: string;
+  tags: Record<string, string>;
+}
+
+export type ExperimentSource = 'local' | 'aws';
+export type ExperimentStatus = 'draft' | 'ready' | 'running' | 'completed' | 'failed';
+
+export interface ExperimentRow {
+  source: ExperimentSource;
+  name: string;
+  status: ExperimentStatus;
+  riskLevel: string;
+  targets: string;
+  duration: string;
+  id: string;
+}
+
+export type ExperimentSubTab = 'all' | 'local' | 'aws';
+
+export interface FilterQuery {
+  service?: string;
+  tag?: { key: string; value: string };
+  status?: string;
+  text?: string;
+}
