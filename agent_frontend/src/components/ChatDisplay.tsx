@@ -1,22 +1,18 @@
 import { memo } from 'react';
 import { Box, Text } from 'ink';
 import type { Message } from '../types.js';
-import { ActionLog } from './ActionLog.js';
+import { InlineToolStatus } from './InlineToolStatus.js';
 
 interface ChatDisplayProps {
   messages: Message[];
+  currentToolCall?: { toolName: string; operation?: string } | null;
 }
 
-export const ChatDisplay = memo(function ChatDisplay({ messages }: ChatDisplayProps) {
+export const ChatDisplay = memo(function ChatDisplay({ messages, currentToolCall }: ChatDisplayProps) {
   return (
     <Box flexDirection="column" paddingY={1}>
       {messages.map((message) => (
         <Box key={message.timestamp.getTime()} flexDirection="column" marginBottom={1}>
-          {/* Show action log for assistant messages with events */}
-          {message.role === 'assistant' && message.events && (
-            <ActionLog events={message.events} />
-          )}
-
           {message.role === 'user' && (
             <Box>
               <Text bold color="cyan">
@@ -40,6 +36,14 @@ export const ChatDisplay = memo(function ChatDisplay({ messages }: ChatDisplayPr
           )}
         </Box>
       ))}
+
+      {/* Inline tool status — shows while agent is working */}
+      {currentToolCall && (
+        <InlineToolStatus
+          toolName={currentToolCall.toolName}
+          operation={currentToolCall.operation}
+        />
+      )}
     </Box>
   );
 });
