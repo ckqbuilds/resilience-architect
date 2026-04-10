@@ -156,21 +156,21 @@ export function ExperimentsView({ onBack, onRefresh }: ExperimentsViewProps) {
           const isSelected = idx === selectedRow;
           return (
             <Box key={`${exp.id}-${idx}`}>
-              <Text inverse={isSelected}>
-                <Box width={8}><Text dimColor>{exp.source === 'local' ? 'Local' : 'AWS'}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={28}><Text>{exp.name.slice(0, 26)}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={12}><Text color={STATUS_COLORS[exp.status]}>{exp.status}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={10}><Text color={exp.riskLevel === 'HIGH' ? 'red' : 'yellow'}>{exp.riskLevel}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={18}><Text>{exp.targets.slice(0, 16)}</Text></Box>
-              </Text>
+              <Box width={8}>
+                <Text inverse={isSelected} dimColor>{exp.source === 'local' ? 'Local' : 'AWS'}</Text>
+              </Box>
+              <Box width={28}>
+                <Text inverse={isSelected}>{exp.name.slice(0, 26)}</Text>
+              </Box>
+              <Box width={12}>
+                <Text inverse={isSelected} color={STATUS_COLORS[exp.status]}>{exp.status}</Text>
+              </Box>
+              <Box width={10}>
+                <Text inverse={isSelected} color={exp.riskLevel === 'HIGH' ? 'red' : 'yellow'}>{exp.riskLevel}</Text>
+              </Box>
+              <Box width={18}>
+                <Text inverse={isSelected}>{exp.targets.slice(0, 16)}</Text>
+              </Box>
               <Text inverse={isSelected} dimColor>{exp.duration}</Text>
             </Box>
           );

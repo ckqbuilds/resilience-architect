@@ -153,18 +153,18 @@ export function ResourcesView({ onBack, onRefresh }: ResourcesViewProps) {
 
           return (
             <Box key={`${resource.id}-${idx}`}>
-              <Text inverse={isSelected}>
-                <Box width={COLUMNS[0]!.width}><Text>{resource.service}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={COLUMNS[1]!.width}><Text>{resource.name.slice(0, COLUMNS[1]!.width - 2)}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={COLUMNS[2]!.width}><Text color="green">{resource.status}</Text></Box>
-              </Text>
-              <Text inverse={isSelected}>
-                <Box width={COLUMNS[3]!.width}><Text>{resource.region}</Text></Box>
-              </Text>
+              <Box width={COLUMNS[0]!.width}>
+                <Text inverse={isSelected}>{resource.service}</Text>
+              </Box>
+              <Box width={COLUMNS[1]!.width}>
+                <Text inverse={isSelected}>{resource.name.slice(0, COLUMNS[1]!.width - 2)}</Text>
+              </Box>
+              <Box width={COLUMNS[2]!.width}>
+                <Text inverse={isSelected} color="green">{resource.status}</Text>
+              </Box>
+              <Box width={COLUMNS[3]!.width}>
+                <Text inverse={isSelected}>{resource.region}</Text>
+              </Box>
               <Text inverse={isSelected} dimColor>{tagStr.slice(0, 30)}</Text>
             </Box>
           );

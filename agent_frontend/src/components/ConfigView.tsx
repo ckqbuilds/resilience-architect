@@ -154,17 +154,15 @@ export function ConfigView({ agentService, mode, onBack }: ConfigViewProps) {
           const isSelected = idx === selectedRow;
           return (
             <Box key={config.label} marginY={0}>
-              <Text inverse={isSelected}>
-                <Box width={20}>
-                  <Text bold={isSelected}>{config.label}</Text>
-                </Box>
-                <Text color={config.editable ? 'green' : 'gray'}>
-                  {config.value}
-                </Text>
-                {config.editable && isSelected && (
-                  <Text dimColor> (← → to change)</Text>
-                )}
+              <Box width={20}>
+                <Text inverse={isSelected} bold={isSelected}>{config.label}</Text>
+              </Box>
+              <Text inverse={isSelected} color={config.editable ? 'green' : 'gray'}>
+                {config.value}
               </Text>
+              {config.editable && isSelected && (
+                <Text dimColor> (← → to change)</Text>
+              )}
             </Box>
           );
         })}
