@@ -2,8 +2,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
+import ast
 import boto3
 import json
+import re
 from dotenv import load_dotenv
 import os
 
@@ -127,9 +129,8 @@ async def discover_resources(request: DiscoverRequest):
         for r in all_resources:
             arn = r.get('Arn', '')
             resource_type = r.get('ResourceType', '')
-            # Extract service name from resource type (e.g., "aws.ecs.cluster" -> "ecs")
-            parts = resource_type.split('.')
-            service = parts[1] if len(parts) > 1 else resource_type
+            # Extract service name from resource type (e.g., "ecs:cluster" -> "ecs")
+            service = resource_type.split(':')[0]
 
             # Get name from properties or ARN
             properties = {}
@@ -142,7 +143,7 @@ async def discover_resources(request: DiscoverRequest):
 
             name = (properties.get('Name') or properties.get('FunctionName') or
                    properties.get('ClusterName') or properties.get('DBInstanceIdentifier') or
-                   arn.split('/')[-1] if '/' in arn else arn.split(':')[-1])
+                   (arn.split('/')[-1] if '/' in arn else arn.split(':')[-1]))
 
             # Get tags
             tags = {}
@@ -211,8 +212,12 @@ async def chat(request: ChatRequest):
         # Clear previous events before new agent call
         event_handler.clear()
 
+        # Tool results land in messages added during this call, not in the final message
+        start = len(resilience_agent.messages)
+
         # Call the agent
         response = resilience_agent(request.message)
+        new_messages = resilience_agent.messages[start:]
 
         # Get captured events
         events = event_handler.get_events()
@@ -250,8 +255,8 @@ async def chat(request: ChatRequest):
         content = extract_text_from_response(response)
 
         # Extract structured data from tool results
-        resources = extract_resources_from_response(response)
-        experiments = extract_experiments_from_response(response)
+        resources = extract_resources_from_messages(new_messages)
+        experiments = extract_experiments_from_messages(new_messages)
 
         return ChatResponse(
             content=content,
@@ -306,7 +311,9 @@ async def respond_to_interrupt(request: InterruptResponse):
 
             # Resume agent with the interrupt response
             # The agent expects a list of responses when resuming from interrupt
+            start = len(resilience_agent.messages)
             result = resilience_agent([interrupt_response])
+            new_messages = resilience_agent.messages[start:]
 
             # Get captured events
             events = event_handler.get_events()
@@ -344,8 +351,8 @@ async def respond_to_interrupt(request: InterruptResponse):
             content = extract_text_from_response(result)
 
             # Extract structured data from tool results
-            resources = extract_resources_from_response(result)
-            experiments = extract_experiments_from_response(result)
+            resources = extract_resources_from_messages(new_messages)
+            experiments = extract_experiments_from_messages(new_messages)
 
             return ChatResponse(
                 content=content,
@@ -592,17 +599,41 @@ async def switch_model(request: ModelSwitchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def extract_resources_from_response(response) -> List[Dict[str, Any]]:
+DATETIME_REPR = re.compile(r'datetime\.datetime\((?:[^()]|\([^()]*\))*\)')
+
+
+def parse_tool_result_text(text: str) -> Any:
+    """
+    Parse a tool result's text: JSON from @tool functions, or use_aws's "Success: <python repr>".
+    Returns None if it can't be parsed.
+    """
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if isinstance(text, str) and text.startswith('Success: '):
+        # shortcut: datetimes become None and other non-literal reprs (Decimal, streams) fail to parse; upgrade if a view needs them
+        literal = DATETIME_REPR.sub('None', text[len('Success: '):])
+        try:
+            return ast.literal_eval(literal)
+        except (ValueError, SyntaxError):
+            pass
+    return None
+
+
+def content_blocks_of(messages: List[Dict[str, Any]]) -> List[Any]:
+    """Flatten content blocks across messages; toolUse and its toolResult live in different messages."""
+    return [b for m in messages if isinstance(m, dict) for b in m.get('content', [])]
+
+
+def extract_resources_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Extract structured resource data from agent tool results.
-    Parses AWS API responses from toolResult blocks in the agent's message.
+    Parses AWS API responses from toolResult blocks in the given messages.
     """
     resources = []
     try:
-        if not hasattr(response, 'message') or not isinstance(response.message, dict):
-            return resources
-
-        content_blocks = response.message.get('content', [])
+        content_blocks = content_blocks_of(messages)
 
         # Track tool uses and their results together
         tool_uses = {}
@@ -638,11 +669,7 @@ def extract_resources_from_response(response) -> List[Dict[str, Any]]:
                     if not result_text:
                         continue
 
-                    try:
-                        result_data = json.loads(result_text) if isinstance(result_text, str) else result_text
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-
+                    result_data = parse_tool_result_text(result_text)
                     if not isinstance(result_data, dict):
                         continue
 
@@ -695,17 +722,14 @@ def extract_resources_from_response(response) -> List[Dict[str, Any]]:
     return resources
 
 
-def extract_experiments_from_response(response) -> List[Dict[str, Any]]:
+def extract_experiments_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Extract experiment plan data from agent tool results.
     Looks for save_experiment_plan or list_experiment_plans tool results.
     """
     experiments = []
     try:
-        if not hasattr(response, 'message') or not isinstance(response.message, dict):
-            return experiments
-
-        content_blocks = response.message.get('content', [])
+        content_blocks = content_blocks_of(messages)
 
         tool_uses = {}
         for block in content_blocks:
